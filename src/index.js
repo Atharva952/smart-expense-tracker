@@ -69,14 +69,7 @@ const port = process.env.PORT;
 const db = process.env.DB_STRING;
 const dbName = process.env.DB_NAME;
 
-mongoose
-  .connect(db, { dbName })
-  .then((res) => {
-    console.log(`mongodb is connected (${dbName}) `);
-  })
-  .catch((err) => {
-    console.log(err);
-  });
+mongoose.set("bufferCommands", false);
 
 app.use("/api/v1/user", userRouter);
 app.use("/api/v1/transactions", transactionRouter);
@@ -89,6 +82,22 @@ app.get("/", (req, res) => {
 
 app.use(errorHandler);
 
-app.listen(port, () => {
-  console.log(`server is running on ${port}`);
-});
+const startServer = async () => {
+  try {
+    await mongoose.connect(db, {
+      dbName,
+      serverSelectionTimeoutMS: 15000,
+      socketTimeoutMS: 45000,
+    });
+    console.log(`mongodb is connected (${dbName})`);
+
+    app.listen(port, () => {
+      console.log(`server is running on ${port}`);
+    });
+  } catch (error) {
+    console.error("Failed to connect MongoDB:", error.message);
+    process.exit(1);
+  }
+};
+
+startServer();
