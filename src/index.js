@@ -24,6 +24,7 @@ const defaultOrigins = [
   "http://localhost:5173",
   "http://localhost:4173",
   "https://smart-expense-tracker-frontend-2.onrender.com",
+  "https://smart-expense-tracker-frontend1.onrender.com",
 ];
 
 const configuredOrigins = [
@@ -45,8 +46,12 @@ const corsOptions = {
     const normalizedOrigin = normalizeOrigin(origin);
     const isConfigured = configuredOrigins.includes(normalizedOrigin);
     const isLocalhostDev = /^http:\/\/localhost:\d+$/.test(normalizedOrigin);
+    const isRenderFrontend =
+      /^https:\/\/smart-expense-tracker-frontend[-\w]*\.onrender\.com$/i.test(
+        normalizedOrigin,
+      );
 
-    if (isConfigured || isLocalhostDev) {
+    if (isConfigured || isLocalhostDev || isRenderFrontend) {
       return callback(null, true);
     }
 
