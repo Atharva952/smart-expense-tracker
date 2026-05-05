@@ -1,7 +1,13 @@
 import axios from "axios";
 
+const ensureApiPrefix = (url = "") => {
+  if (!url) return "http://localhost:5000/api/v1";
+  const trimmed = url.trim().replace(/\/+$/, "");
+  return trimmed.endsWith("/api/v1") ? trimmed : `${trimmed}/api/v1`;
+};
+
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || "http://localhost:5000/api/v1",
+  baseURL: ensureApiPrefix(import.meta.env.VITE_API_URL),
   withCredentials: true,
 });
 

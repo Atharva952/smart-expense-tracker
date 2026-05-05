@@ -18,33 +18,47 @@ app.use(express.json());
 app.use(cookieParser());
 app.use(morgan("dev"));
 
-const configuredOrigins = (
-  process.env.CLIENT_URLS ||
-  process.env.CLIENT_URL ||
-  ""
-)
-  .split(",")
-  .map((origin) => origin.trim())
+const normalizeOrigin = (origin = "") => origin.trim().replace(/\/+$/, "");
+
+const defaultOrigins = [
+  "http://localhost:5173",
+  "http://localhost:4173",
+  "https://smart-expense-tracker-frontend-2.onrender.com",
+];
+
+const configuredOrigins = [
+  ...defaultOrigins,
+  process.env.CLIENT_URLS,
+  process.env.CLIENT_URL,
+  process.env.FRONTEND_URL,
+  process.env.FRONTEND_ORIGIN,
+]
+  .filter(Boolean)
+  .flatMap((origins) => origins.split(","))
+  .map((origin) => normalizeOrigin(origin))
   .filter(Boolean);
 
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      // Allow non-browser clients/tools without Origin header.
-      if (!origin) return callback(null, true);
+const corsOptions = {
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true);
 
-      const isConfigured = configuredOrigins.includes(origin);
-      const isLocalhostDev = /^http:\/\/localhost:\d+$/.test(origin);
+    const normalizedOrigin = normalizeOrigin(origin);
+    const isConfigured = configuredOrigins.includes(normalizedOrigin);
+    const isLocalhostDev = /^http:\/\/localhost:\d+$/.test(normalizedOrigin);
 
-      if (isConfigured || isLocalhostDev) {
-        return callback(null, true);
-      }
+    if (isConfigured || isLocalhostDev) {
+      return callback(null, true);
+    }
 
-      return callback(new Error(`CORS blocked for origin: ${origin}`));
-    },
-    credentials: true,
-  }),
-);
+    return callback(null, false);
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  optionsSuccessStatus: 204,
+};
+
+app.use(cors(corsOptions));
 
 const port = process.env.PORT;
 const db = process.env.DB_STRING;
