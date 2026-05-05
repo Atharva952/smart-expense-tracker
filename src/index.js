@@ -69,6 +69,16 @@ const port = process.env.PORT;
 const db = process.env.DB_STRING;
 const dbName = process.env.DB_NAME;
 
+const requiredEnvVars = ["PORT", "DB_STRING", "DB_NAME", "JWT_SECRET", "SALT"];
+const missingEnvVars = requiredEnvVars.filter((key) => !process.env[key]);
+
+if (missingEnvVars.length) {
+  console.error(
+    `Missing required environment variables: ${missingEnvVars.join(", ")}`,
+  );
+  process.exit(1);
+}
+
 mongoose.set("bufferCommands", false);
 
 app.use("/api/v1/user", userRouter);
