@@ -18,7 +18,12 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { buildMonthlySummary, getCategorySuggestion } from "../lib/aiInsights";
+import {
+  buildMonthlySummary,
+  generateMonthlySummaryAI,
+  getCategorySuggestion,
+  getSmartCategory,
+} from "../lib/aiInsights";
 import {
   addTransaction,
   fetchDashboard,
@@ -98,6 +103,8 @@ const DashboardPage = () => {
     date: new Date().toISOString().slice(0, 10),
   });
   const [categoryTouched, setCategoryTouched] = useState(false);
+  const [aiCategorySuggestion, setAiCategorySuggestion] = useState(null);
+  const [monthlySummary, setMonthlySummary] = useState(null);
 
   useEffect(() => {
     dispatch(fetchDashboard());
@@ -131,7 +138,7 @@ const DashboardPage = () => {
 
   const recentSorted = useMemo(() => sortedTransactions.slice(0, 10), [sortedTransactions]);
 
-  const aiCategorySuggestion = useMemo(
+  const ruleBasedCategorySuggestion = useMemo(
     () =>
       getCategorySuggestion({
         transactions: sortedTransactions,
@@ -143,7 +150,7 @@ const DashboardPage = () => {
     [categoryOptions, form.merchant, form.notes, form.type, sortedTransactions],
   );
 
-  const monthlySummary = useMemo(
+  const fallbackMonthlySummary = useMemo(
     () =>
       buildMonthlySummary({
         dashboard,
@@ -151,6 +158,79 @@ const DashboardPage = () => {
       }),
     [dashboard, sortedTransactions],
   );
+
+  useEffect(() => {
+    setAiCategorySuggestion(ruleBasedCategorySuggestion);
+  }, [ruleBasedCategorySuggestion]);
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    const loadSuggestion = async () => {
+      const hasInput =
+        String(form.merchant || "").trim() || String(form.notes || "").trim();
+      if (!hasInput || form.type !== "expense") {
+        if (!isCancelled) setAiCategorySuggestion(ruleBasedCategorySuggestion);
+        return;
+      }
+
+      const suggestion = await getSmartCategory({
+        transactions: sortedTransactions,
+        type: form.type,
+        merchant: form.merchant,
+        notes: form.notes,
+        amount: form.amount,
+        categoryOptions,
+      });
+
+      if (!isCancelled && suggestion) {
+        setAiCategorySuggestion(suggestion);
+      }
+    };
+
+    const timer = setTimeout(loadSuggestion, 350);
+    return () => {
+      isCancelled = true;
+      clearTimeout(timer);
+    };
+  }, [
+    categoryOptions,
+    form.amount,
+    form.merchant,
+    form.notes,
+    form.type,
+    ruleBasedCategorySuggestion,
+    sortedTransactions,
+  ]);
+
+  useEffect(() => {
+    setMonthlySummary(fallbackMonthlySummary);
+  }, [fallbackMonthlySummary]);
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    const loadSummary = async () => {
+      if (!dashboard?.cards) return;
+
+      const summary = await generateMonthlySummaryAI({
+        income: Number(dashboard.cards.income || 0),
+        expenses: Number(dashboard.cards.expenses || 0),
+        balance: Number(dashboard.cards.totalBalance || 0),
+        transactions: sortedTransactions.slice(0, 10),
+      });
+
+      if (!isCancelled && summary) {
+        setMonthlySummary(summary);
+      }
+    };
+
+    const timer = setTimeout(loadSummary, 500);
+    return () => {
+      isCancelled = true;
+      clearTimeout(timer);
+    };
+  }, [dashboard?.cards, sortedTransactions]);
 
   useEffect(() => {
     if (!categoryOptions.length) {

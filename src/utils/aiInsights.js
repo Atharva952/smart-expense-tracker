@@ -1,4 +1,4 @@
-import api from "./api";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 const STOP_WORDS = new Set([
   "the",
@@ -31,15 +31,8 @@ const STOP_WORDS = new Set([
   "credit",
 ]);
 
-const formatMoney = (value) =>
-  new Intl.NumberFormat("en-IN", {
-    style: "currency",
-    currency: "INR",
-    maximumFractionDigits: 0,
-  }).format(Number(value || 0));
-
 const normalizeText = (text = "") =>
-  text
+  String(text)
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, " ")
     .replace(/\s+/g, " ")
@@ -50,26 +43,45 @@ const tokenize = (text = "") =>
     .split(" ")
     .filter((token) => token.length > 2 && !STOP_WORDS.has(token));
 
-const sameMonth = (date, referenceDate) => {
-  const parsed = new Date(date);
-  return (
-    parsed.getFullYear() === referenceDate.getFullYear() &&
-    parsed.getMonth() === referenceDate.getMonth()
+const normalizeConfidence = (value) => {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "high" || normalized === "medium" || normalized === "low") {
+    return normalized;
+  }
+  return "medium";
+};
+
+const coerceCategoryFromAllowed = (value, allowed) => {
+  if (!value || !allowed?.length) return null;
+  const direct = allowed.find(
+    (item) => String(item).trim().toLowerCase() === String(value).trim().toLowerCase(),
   );
+  return direct || null;
 };
 
-const getTopCategory = (transactions) => {
-  const categorySpend = transactions.reduce((acc, tx) => {
-    const key = tx.category?.trim();
-    if (!key) return acc;
-    acc[key] = (acc[key] || 0) + Number(tx.amount || 0);
-    return acc;
-  }, {});
+const getDefaultExpenseCategories = () => [
+  "Food",
+  "Travel",
+  "Shopping",
+  "Bills",
+  "Entertainment",
+  "Health",
+  "Other",
+];
 
-  const top = Object.entries(categorySpend).sort((a, b) => b[1] - a[1])[0];
-  if (!top) return null;
-  return { category: top[0], amount: top[1] };
-};
+const apiKey =
+  process.env.GEMINI_API_KEY ||
+  process.env.AI_API ||
+  process.env.GOOGLE_API_KEY ||
+  "";
+
+let model = null;
+if (apiKey) {
+  const genAI = new GoogleGenerativeAI(apiKey.trim());
+  model = genAI.getGenerativeModel({
+    model: process.env.GEMINI_MODEL || "gemini-1.5-flash",
+  });
+}
 
 export const getCategorySuggestion = ({
   transactions = [],
@@ -144,23 +156,44 @@ export const getCategorySuggestion = ({
 };
 
 export const getCategorySuggestionAI = async ({
-  type,
   merchant,
   notes,
   amount,
   categoryOptions = [],
 }) => {
-  try {
-    const { data } = await api.post("/analytics/ai-category", {
-      type,
-      merchant,
-      notes,
-      amount,
-      categoryOptions,
-    });
+  if (!model) return null;
 
-    return data?.suggestion || null;
-  } catch (error) {
+  const categories = categoryOptions.length
+    ? categoryOptions
+    : getDefaultExpenseCategories();
+
+  const prompt = `
+Classify this transaction into exactly one category from this list:
+${categories.join(", ")}
+
+Merchant: ${merchant || ""}
+Notes: ${notes || ""}
+Amount: INR ${Number(amount || 0)}
+
+Return valid JSON only:
+{"category": "", "confidence": ""}
+`;
+
+  try {
+    const result = await model.generateContent(prompt);
+    let text = result?.response?.text?.() || "";
+    text = text.replace(/```json|```/gi, "").trim();
+    const parsed = JSON.parse(text);
+    const aiCategory = coerceCategoryFromAllowed(parsed?.category, categories);
+
+    if (!aiCategory) return null;
+
+    return {
+      category: aiCategory,
+      confidence: normalizeConfidence(parsed?.confidence),
+      reason: "ai model prediction",
+    };
+  } catch (err) {
     return null;
   }
 };
@@ -180,66 +213,37 @@ export const generateMonthlySummaryAI = async ({
   income,
   expenses,
   balance,
-  transactions,
+  transactions = [],
 }) => {
+  if (!model) return null;
+
+  const topTransactions = transactions
+    .slice(0, 5)
+    .map((tx) => `${tx.category || "Other"} INR ${Number(tx.amount || 0)}`)
+    .join("\n");
+
+  const prompt = `
+You are a financial advisor.
+
+Income: INR ${Number(income || 0)}
+Expenses: INR ${Number(expenses || 0)}
+Balance: INR ${Number(balance || 0)}
+
+Top transactions:
+${topTransactions || "No recent transactions"}
+
+Give:
+1. Summary
+2. Insight
+3. Suggestion
+
+Keep it concise and practical.
+`;
+
   try {
-    const { data } = await api.post("/analytics/monthly-summary", {
-      income,
-      expenses,
-      balance,
-      transactions,
-    });
-    return data?.summary || null;
-  } catch (error) {
+    const result = await model.generateContent(prompt);
+    return result?.response?.text?.()?.trim() || null;
+  } catch (err) {
     return null;
   }
-};
-
-export const buildMonthlySummary = ({ dashboard, transactions = [] }) => {
-  if (!dashboard?.cards) return null;
-
-  const income = Number(dashboard.cards.income || 0);
-  const expenses = Number(dashboard.cards.expenses || 0);
-  const balance = Number(dashboard.cards.totalBalance || 0);
-  const expenseDelta = Number(dashboard.cards?.deltas?.expense || 0);
-  const incomeDelta = Number(dashboard.cards?.deltas?.income || 0);
-
-  const now = new Date();
-  const monthLabel = now.toLocaleString("en-US", {
-    month: "long",
-    year: "numeric",
-  });
-
-  const currentMonthExpenses = transactions.filter(
-    (tx) => tx.type === "expense" && sameMonth(tx.date, now),
-  );
-  const topCategory = getTopCategory(currentMonthExpenses);
-
-  const headline =
-    income === 0 && expenses === 0
-      ? `No transactions were logged in ${monthLabel} yet.`
-      : balance >= 0
-        ? `You stayed cash-positive in ${monthLabel}, finishing at ${formatMoney(balance)}.`
-        : `Expenses are currently ahead of income in ${monthLabel} by ${formatMoney(
-            Math.abs(balance),
-          )}.`;
-
-  const details = [
-    `Income is ${formatMoney(income)} and expenses are ${formatMoney(expenses)} this month.`,
-    `Vs last month: income ${incomeDelta >= 0 ? "up" : "down"} ${Math.abs(
-      incomeDelta,
-    )}% and expenses ${expenseDelta >= 0 ? "up" : "down"} ${Math.abs(expenseDelta)}%.`,
-  ];
-
-  if (topCategory) {
-    details.push(
-      `Top expense category is ${topCategory.category} at ${formatMoney(topCategory.amount)}.`,
-    );
-  }
-
-  return {
-    title: "AI Monthly Summary",
-    headline,
-    details,
-  };
 };

@@ -1,6 +1,10 @@
 import mongoose from "mongoose";
 import transactionModel from "../models/transaction.model";
 import budgetModel from "../models/budget.model";
+import {
+  generateMonthlySummaryAI,
+  getSmartCategory,
+} from "../utils/aiInsights";
 
 const getMonthLabel = (date) =>
   date.toLocaleString("en-US", { month: "short", timeZone: "UTC" });
@@ -28,6 +32,31 @@ const getSixMonthBuckets = () => {
     });
   }
   return points;
+};
+
+const toSummaryObject = (text, fallback) => {
+  if (!text) return fallback;
+
+  const lines = text
+    .split("\n")
+    .map((line) =>
+      line
+        .replace(/^\s*[\-\*\u2022]\s*/, "")
+        .replace(/^\s*\d+[\)\.\:-]?\s*/, "")
+        .trim(),
+    )
+    .filter(Boolean);
+
+  if (!lines.length) return fallback;
+
+  const headline = lines[0] || fallback.headline;
+  const details = lines.slice(1, 4);
+
+  return {
+    title: fallback.title,
+    headline,
+    details: details.length ? details : fallback.details,
+  };
 };
 
 export const getDashboard = async (req, res) => {
@@ -252,6 +281,113 @@ export const getReports = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Failed to load reports",
+    });
+  }
+};
+
+export const getAICategorySuggestion = async (req, res) => {
+  try {
+    const { type, merchant, notes, amount, categoryOptions = [] } = req.body || {};
+
+    const transactions = await transactionModel
+      .find({ user: req.user.id })
+      .sort({ date: -1 })
+      .limit(300)
+      .select("type category merchant notes amount date");
+
+    const monthKey = new Date().toISOString().slice(0, 7);
+    const monthlyBudgets = await budgetModel
+      .find({
+        user: req.user.id,
+        month: monthKey,
+      })
+      .select("category");
+
+    const budgetCategories = monthlyBudgets
+      .map((item) => item.category?.trim())
+      .filter(Boolean);
+
+    const safeCategoryOptions = Array.isArray(categoryOptions)
+      ? categoryOptions.filter(Boolean)
+      : [];
+
+    const mergedCategoryOptions = [
+      ...new Set([...safeCategoryOptions, ...budgetCategories]),
+    ];
+
+    const suggestion = await getSmartCategory({
+      transactions,
+      type,
+      merchant,
+      notes,
+      amount,
+      categoryOptions: mergedCategoryOptions,
+    });
+
+    return res.status(200).json({
+      success: true,
+      suggestion: suggestion || null,
+      source: suggestion?.reason === "ai model prediction" ? "ai" : "rule-based",
+    });
+  } catch (error) {
+    return res.status(200).json({
+      success: true,
+      suggestion: null,
+      source: "fallback",
+    });
+  }
+};
+
+export const getAIMonthlySummary = async (req, res) => {
+  try {
+    const { income = 0, expenses = 0, balance = 0, transactions = [] } = req.body || {};
+
+    const numericIncome = Number(income || 0);
+    const numericExpenses = Number(expenses || 0);
+    const numericBalance = Number(balance || 0);
+
+    const fallback = {
+      title: "AI Monthly Summary",
+      headline:
+        numericIncome === 0 && numericExpenses === 0
+          ? "No transactions were logged yet in this month."
+          : numericBalance >= 0
+            ? `You are cash-positive this month with balance INR ${numericBalance}.`
+            : `Expenses are ahead this month by INR ${Math.abs(numericBalance)}.`,
+      details: [
+        `Income is INR ${numericIncome} and expenses are INR ${numericExpenses}.`,
+        "Track recurring spending categories to improve next month savings.",
+        "Review non-essential spends weekly to stay within budget.",
+      ],
+    };
+
+    const summaryText = await generateMonthlySummaryAI({
+      income: numericIncome,
+      expenses: numericExpenses,
+      balance: numericBalance,
+      transactions: Array.isArray(transactions) ? transactions : [],
+    });
+
+    return res.status(200).json({
+      success: true,
+      summary: toSummaryObject(summaryText, fallback),
+      text: summaryText || "",
+      source: summaryText ? "ai" : "fallback",
+    });
+  } catch (error) {
+    return res.status(200).json({
+      success: true,
+      summary: {
+        title: "AI Monthly Summary",
+        headline: "Monthly summary is available in fallback mode.",
+        details: [
+          "AI summary could not be generated right now.",
+          "Your dashboard and transactions are still fully functional.",
+          "Retry in a few moments.",
+        ],
+      },
+      text: "",
+      source: "fallback",
     });
   }
 };

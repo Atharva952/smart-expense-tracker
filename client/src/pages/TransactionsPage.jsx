@@ -8,7 +8,7 @@ import {
   ReceiptText,
   Wallet,
 } from "lucide-react";
-import { getCategorySuggestion } from "../lib/aiInsights";
+import { getCategorySuggestion, getSmartCategory } from "../lib/aiInsights";
 import {
   addTransaction,
   fetchBudgets,
@@ -49,6 +49,7 @@ const TransactionsPage = () => {
     date: new Date().toISOString().slice(0, 10),
   });
   const [categoryTouched, setCategoryTouched] = useState(false);
+  const [aiCategorySuggestion, setAiCategorySuggestion] = useState(null);
 
   const categoryOptions = useMemo(
     () => (form.type === "income" ? ["Income"] : expenseCategoryOptions),
@@ -86,7 +87,7 @@ const TransactionsPage = () => {
     [transactions],
   );
 
-  const aiCategorySuggestion = useMemo(
+  const ruleBasedCategorySuggestion = useMemo(
     () =>
       getCategorySuggestion({
         transactions: sortedTransactions,
@@ -97,6 +98,50 @@ const TransactionsPage = () => {
       }),
     [categoryOptions, form.merchant, form.notes, form.type, sortedTransactions],
   );
+
+  useEffect(() => {
+    setAiCategorySuggestion(ruleBasedCategorySuggestion);
+  }, [ruleBasedCategorySuggestion]);
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    const loadSuggestion = async () => {
+      const hasInput =
+        String(form.merchant || "").trim() || String(form.notes || "").trim();
+      if (!hasInput || form.type !== "expense") {
+        if (!isCancelled) setAiCategorySuggestion(ruleBasedCategorySuggestion);
+        return;
+      }
+
+      const suggestion = await getSmartCategory({
+        transactions: sortedTransactions,
+        type: form.type,
+        merchant: form.merchant,
+        notes: form.notes,
+        amount: form.amount,
+        categoryOptions,
+      });
+
+      if (!isCancelled && suggestion) {
+        setAiCategorySuggestion(suggestion);
+      }
+    };
+
+    const timer = setTimeout(loadSuggestion, 350);
+    return () => {
+      isCancelled = true;
+      clearTimeout(timer);
+    };
+  }, [
+    categoryOptions,
+    form.amount,
+    form.merchant,
+    form.notes,
+    form.type,
+    ruleBasedCategorySuggestion,
+    sortedTransactions,
+  ]);
 
   useEffect(() => {
     if (!aiCategorySuggestion) return;
