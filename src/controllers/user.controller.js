@@ -393,27 +393,42 @@ export const refreshToken = async (req, res) => {
 export const logout = async (req, res) => {
   try {
     const refreshToken = req.cookies.refreshToken;
-    if (!refreshToken) {
-      return res.status(400).json({
-        success: false,
-        message: "Refresh token not found",
-      });
+    const authHeader = req.headers.authorization || "";
+    const accessToken = authHeader.startsWith("Bearer ")
+      ? authHeader.slice(7)
+      : "";
+
+    if (refreshToken) {
+      const refreshTokenHash = getRefreshTokenHash(refreshToken);
+      await sessionModel.updateOne(
+        {
+          refreshTokenHash,
+          revoked: false,
+        },
+        {
+          revoked: true,
+        },
+      );
+    } else if (accessToken) {
+      try {
+        const decoded = jwt.verify(accessToken, process.env.JWT_SECRET);
+        if (decoded?.id && decoded?.sessionId) {
+          await sessionModel.updateOne(
+            {
+              _id: decoded.sessionId,
+              user: decoded.id,
+              revoked: false,
+            },
+            {
+              revoked: true,
+            },
+          );
+        }
+      } catch (error) {
+        // Intentionally ignore invalid/expired access token during logout.
+      }
     }
 
-    const refreshTokenHash = getRefreshTokenHash(refreshToken);
-    const session = await sessionModel.findOne({
-      refreshTokenHash,
-      revoked: false,
-    });
-    if (!session) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid refresh token",
-      });
-    }
-
-    session.revoked = true;
-    await session.save();
     res.clearCookie("refreshToken", cookieOptions());
 
     return res.status(200).json({

@@ -75,7 +75,11 @@ export const fetchMe = createAsyncThunk(
 );
 
 export const logoutUser = createAsyncThunk("auth/logoutUser", async () => {
-  await api.post("/user/logout");
+  try {
+    await api.post("/user/logout");
+  } catch {
+    // Keep logout UX reliable even if server session is already invalid/expired.
+  }
   localStorage.removeItem("accessToken");
 });
 

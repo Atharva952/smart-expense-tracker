@@ -4,6 +4,7 @@ import sessionModel from "../models/session.model";
 
 const ACCESS_TOKEN_AGE = "15m";
 const REFRESH_TOKEN_AGE = "7d";
+const isProduction = process.env.NODE_ENV === "production";
 
 export const signAccessToken = (payload) => {
   return jwt.sign(payload, process.env.JWT_SECRET, {
@@ -23,8 +24,8 @@ export const getRefreshTokenHash = (refreshToken) => {
 
 export const cookieOptions = () => ({
   httpOnly: true,
-  secure: process.env.NODE_ENV === "production",
-  sameSite: "strict",
+  secure: isProduction,
+  sameSite: isProduction ? "none" : "lax",
   maxAge: 7 * 24 * 60 * 60 * 1000,
 });
 
